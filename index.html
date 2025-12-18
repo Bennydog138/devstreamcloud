@@ -252,20 +252,17 @@
 
         const initAuth = async () => {
             try {
-                // Rule 3: Auth BEFORE any queries
-                // Improved logic to prevent custom-token-mismatch errors
                 if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token && __initial_auth_token !== "") {
                     try {
                         await signInWithCustomToken(auth, __initial_auth_token);
                     } catch (tokenErr) {
-                        console.warn("Custom token failed, falling back to Anonymous:", tokenErr);
                         await signInAnonymously(auth);
                     }
                 } else {
                     await signInAnonymously(auth);
                 }
             } catch (err) {
-                console.error("Auth failed definitively:", err);
+                console.error("Auth failed:", err);
                 if (err.code === 'auth/configuration-not-found' || err.code === 'auth/operation-not-allowed') {
                     document.getElementById('config-warning').classList.remove('hidden');
                 }
@@ -281,13 +278,17 @@
         });
 
         function setupRealtimeListeners() {
-            // Rule 1: Strict collection paths
             const usersRef = collection(db, 'artifacts', appId, 'public', 'data', 'users');
             const tasksRef = collection(db, 'artifacts', appId, 'public', 'data', 'tasks');
 
             onSnapshot(usersRef, (snapshot) => {
                 allUsers = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                if (allUsers.length === 0) createDefaultAdmin();
+                
+                // Initialize admin only if no users exist at all
+                if (allUsers.length === 0) {
+                    createDefaultAdmin();
+                }
+
                 if (window.APP?.currentView === 'users') renderUsers();
                 updateStats();
                 updateAssigneeDropdown();
@@ -341,20 +342,21 @@
 
         document.getElementById('login-form').addEventListener('submit', async (e) => {
             e.preventDefault();
-            const usernameInput = document.getElementById('username').value;
-            const passwordInput = document.getElementById('password').value;
+            const usernameInput = document.getElementById('username').value.trim();
+            const passwordInput = document.getElementById('password').value.trim();
             
-            const user = allUsers.find(u => 
+            // Search all users for a match
+            const userMatch = allUsers.find(u => 
                 u.username === usernameInput && 
                 u.password === passwordInput
             );
 
-            if (user) {
-                currentUserData = user;
+            if (userMatch) {
+                currentUserData = userMatch;
                 document.getElementById('login-screen').classList.add('hidden');
                 document.getElementById('main-dashboard').classList.remove('hidden');
                 initDashboard();
-                showToast(`Welcome back, ${user.name}`);
+                showToast(`Welcome back, ${userMatch.name}`);
             } else {
                 const err = document.getElementById('login-error');
                 err.innerText = "Invalid credentials";
@@ -366,15 +368,21 @@
             currentUserData = null;
             document.getElementById('main-dashboard').classList.add('hidden');
             document.getElementById('login-screen').classList.remove('hidden');
+            document.getElementById('login-form').reset();
         };
 
         function initDashboard() {
+            // Check role string to determine admin status
             const isAdmin = currentUserData.role === 'admin';
-            document.getElementById('nav-users').style.display = isAdmin ? 'flex' : 'none';
+            
+            document.getElementById('nav-users').classList.toggle('hidden', !isAdmin);
+            document.getElementById('nav-users').classList.toggle('flex', isAdmin);
             document.getElementById('btn-add-task').style.display = isAdmin ? 'flex' : 'none';
+            
             document.getElementById('user-display-name').innerText = currentUserData.name;
-            document.getElementById('user-display-role').innerText = currentUserData.role;
+            document.getElementById('user-display-role').innerText = currentUserData.role === 'admin' ? 'Super Admin' : 'Developer';
             document.getElementById('user-avatar').innerText = currentUserData.name[0];
+            
             showView('overview');
         }
 
@@ -393,9 +401,9 @@
             body.innerHTML = allUsers.map(u => `
                 <tr>
                     <td class="px-6 py-4 font-bold">${u.name} <span class="text-xs font-normal text-slate-400">@${u.username}</span></td>
-                    <td class="px-6 py-4 capitalize text-slate-500">${u.role}</td>
+                    <td class="px-6 py-4 capitalize text-slate-500">${u.role === 'admin' ? 'Super Admin' : 'Developer'}</td>
                     <td class="px-6 py-4 text-right">
-                        ${u.username !== 'admin' ? `<button onclick="deleteUser('${u.id}')" class="text-slate-300 hover:text-red-500"><i class="fas fa-trash"></i></button>` : '-'}
+                        ${u.username !== 'admin' ? `<button onclick="deleteUser('${u.id}')" class="text-slate-300 hover:text-red-500 transition-colors"><i class="fas fa-trash"></i></button>` : '-'}
                     </td>
                 </tr>
             `).join('');
@@ -434,9 +442,9 @@
         }
 
         window.deleteUser = async (id) => {
-            if (!confirm("Remove this user?")) return;
+            if (!confirm("Remove this team member?")) return;
             await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'users', id));
-            showToast("User removed");
+            showToast("Member removed");
         };
 
         window.deleteTask = async (id) => {
@@ -454,7 +462,7 @@
         };
 
         window.downloadWork = (name) => {
-            showToast("File viewer simulation: " + name);
+            showToast("Opening work submission: " + name);
         };
 
         function showToast(msg) {
@@ -467,16 +475,24 @@
         document.getElementById('user-form').addEventListener('submit', async (e) => {
             e.preventDefault();
             const usersRef = collection(db, 'artifacts', appId, 'public', 'data', 'users');
+            
+            // Basic duplicate check
+            const username = document.getElementById('new-username').value.trim();
+            if (allUsers.some(u => u.username === username)) {
+                showToast("Username already exists");
+                return;
+            }
+
             await addDoc(usersRef, {
-                name: document.getElementById('new-name').value,
-                username: document.getElementById('new-username').value,
-                password: document.getElementById('new-password').value,
+                name: document.getElementById('new-name').value.trim(),
+                username: username,
+                password: document.getElementById('new-password').value.trim(),
                 role: document.getElementById('new-role').value,
                 created: new Date().toISOString()
             });
             window.toggleModal('user-modal', false);
             document.getElementById('user-form').reset();
-            showToast("User created");
+            showToast("Member added successfully");
         });
 
         document.getElementById('task-form').addEventListener('submit', async (e) => {
@@ -486,8 +502,8 @@
             const tasksRef = collection(db, 'artifacts', appId, 'public', 'data', 'tasks');
             
             await addDoc(tasksRef, {
-                title: document.getElementById('task-title').value,
-                desc: document.getElementById('task-desc').value,
+                title: document.getElementById('task-title').value.trim(),
+                desc: document.getElementById('task-desc').value.trim(),
                 assigneeId: assigneeId,
                 assigneeName: assignee.name,
                 status: 'pending',
@@ -503,8 +519,11 @@
             const id = document.getElementById('submit-task-id').value;
             const fileInput = document.getElementById('submission-file');
             const file = fileInput.files[0];
-            const notes = document.getElementById('submission-notes').value;
-            if (!file) return;
+            const notes = document.getElementById('submission-notes').value.trim();
+            if (!file) {
+                showToast("Please select a file");
+                return;
+            }
             const taskDoc = doc(db, 'artifacts', appId, 'public', 'data', 'tasks', id);
             await updateDoc(taskDoc, {
                 status: 'completed',
@@ -514,7 +533,7 @@
             });
             window.toggleModal('upload-modal', false);
             document.getElementById('submission-form').reset();
-            showToast("Task completed");
+            showToast("Submission received");
         });
 
         initAuth();
